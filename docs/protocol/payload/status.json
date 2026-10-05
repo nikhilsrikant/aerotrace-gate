@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aerotrace.example/a2a/1.0.0/payload/status.json",
+  "title": "Progress or state change",
+  "type": "object",
+  "required": [
+    "text"
+  ],
+  "properties": {
+    "text": {
+      "type": "string",
+      "minLength": 1
+    },
+    "dispute": {
+      "type": "string",
+      "description": "Finding ID this status disputes"
+    }
+  }
+}

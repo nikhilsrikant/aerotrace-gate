@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: aerotrace-config }
+data:
+  PUBLIC_URL: "https://aerotrace.example.com"
+  # Passkeys are bound to this host. RP_ID / RP_ORIGINS override it (see docs/deploy.md).
+  # RP_ID: "aerotrace.example.com"
+  LOG_LEVEL: "info"
+  WORKER_CONCURRENCY: "2"
+  SCHEDULER_INTERVAL_MS: "30000"
+  SEED_DEMO_DATA: "false"
+  LLM_PROVIDER: "none"
+  OIDC_LABEL: "Sign in with company SSO"
+  OIDC_GROUPS_CLAIM: "groups"
+  MAX_UPLOAD_MB: "200"
+  DATABASE_SSL: "require"

@@ -1,0 +1,47 @@
+# OpenTelemetry collector (contrib) sidecar for Cloud Run.
+# Terraform passes this file in the OTEL_CONFIG variable and starts the collector with --config=env:OTEL_CONFIG.
+# Credentials come from the Cloud Run service account (Application Default Credentials).
+extensions:
+  # Cloud Run's startup probe on the sidecar hits this port, so the app container starts only after the collector is up.
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: localhost:4317
+      http:
+        endpoint: localhost:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+  resourcedetection:
+    detectors: [env, gcp]
+    timeout: 10s
+    override: false
+  batch:
+    timeout: 10s
+    send_batch_size: 200
+
+exporters:
+  googlecloud:
+    metric:
+      # Metric types become custom.googleapis.com/aerotrace/<otel name>,
+      # e.g. custom.googleapis.com/aerotrace/aerotrace.approvals.oldest_age_seconds
+      prefix: custom.googleapis.com/aerotrace
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection, batch]
+      exporters: [googlecloud]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection, batch]
+      exporters: [googlecloud]

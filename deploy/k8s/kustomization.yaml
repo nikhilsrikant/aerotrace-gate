@@ -1,0 +1,17 @@
+# kubectl apply -k deploy/k8s     (edit secret.example.yaml first, or replace it with your secret manager)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: aerotrace
+resources:
+  - namespace.yaml
+  - config.yaml
+  - secret.example.yaml
+  - migrate-job.yaml
+  - web.yaml
+  - worker.yaml
+  - keda-scaledobject.yaml
+  - network-policy.yaml
+images:
+  - name: aerotrace-gate
+    newName: registry.example.com/aerotrace/aerotrace-gate
+    newTag: "2.3.0"

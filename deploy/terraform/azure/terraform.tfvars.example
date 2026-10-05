@@ -1,0 +1,51 @@
+# Copy to terraform.tfvars and fill in. Required values first.
+
+subscription_id = "00000000-0000-0000-0000-000000000000"
+admin_email     = "admin@example.com"
+github_repo     = "nikhilsrikant/aerotrace-gate"
+
+location    = "eastus2"
+name_prefix = "aerotrace"
+environment = "prod"
+alert_email = "aerotrace-oncall@example.com"
+
+# Final hostname. Leave both empty to use the Container Apps default hostname (fine for a trial,
+# but passkeys enrolled there will not work on a custom domain later).
+custom_domain = "gate.example.com"
+# public_url  = "https://gate.example.com"
+
+# Your Terraform runner's public IP, so the vault can deny everyone else.
+# key_vault_allowed_ips = ["203.0.113.10"]
+
+# allowed_cidrs = ["203.0.113.0/24"]
+
+image_tag       = "2.3.0"
+secret_delivery = "ref"
+
+extra_environment = {
+  LOG_LEVEL      = "info"
+  LLM_PROVIDER   = "none"
+  SEED_DEMO_DATA = "false"
+  # OIDC_ISSUER    = "https://login.microsoftonline.com/<tenant>/v2.0"
+  # OIDC_CLIENT_ID = "..."
+  # OIDC_CLIENT_SECRET_REF = "azure-kv://<vault-name>/oidc-client-secret"
+}
+
+# Evidence connectors read tokens from their own Key Vault (see the connector_key_vault_name output).
+# List internal Git or Jira hosts here if they sit on private addresses.
+# connector_allowed_hosts = "github.internal.example.com,jira.internal.example.com"
+
+# ---- pilot (cheaper) ----
+# db_sku                  = "B_Standard_B2s"
+# db_zone_redundant_ha    = false
+# db_geo_redundant_backup = false
+# storage_replication     = "ZRS"
+# web_min_replicas        = 1
+# aca_zone_redundant      = false
+# key_vault_sku           = "standard"   # signing key becomes software-protected (EC)
+
+# ---- production ----
+# db_sku               = "GP_Standard_D4ds_v5"
+# db_zone_redundant_ha = true
+# web_min_replicas     = 2
+# worker_max_replicas  = 20

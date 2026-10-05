@@ -1,0 +1,72 @@
+# AeroTrace Gate on one host:  cp .env.example .env  (fill it in)  then  docker compose up -d
+# Scale workers:               docker compose up -d --scale worker=4
+# Monitoring (optional):       docker compose --profile monitoring up -d
+name: aerotrace
+
+x-app: &app
+  image: ${AEROTRACE_IMAGE:-aerotrace-gate:3.0.0}
+  restart: unless-stopped
+  read_only: true
+  tmpfs: [/tmp]
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  env_file: .env
+  environment:
+    DATABASE_URL: postgres://aerotrace:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/aerotrace
+  depends_on:
+    postgres: { condition: service_healthy }
+  logging: { driver: json-file, options: { max-size: 20m, max-file: "5" } }
+
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: aerotrace
+      POSTGRES_USER: aerotrace
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U aerotrace -d aerotrace"], interval: 5s, timeout: 5s, retries: 20 }
+    shm_size: 256m
+
+  migrate:
+    <<: *app
+    command: ["migrate"]
+    restart: "no"
+
+  web:
+    <<: *app
+    command: ["web"]
+    ports: ["${WEB_PORT:-3000}:3000"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    deploy: { resources: { limits: { cpus: "2", memory: 1g } } }
+
+  worker:
+    <<: *app
+    command: ["worker"]
+    environment:
+      DATABASE_URL: postgres://aerotrace:${POSTGRES_PASSWORD}@postgres:5432/aerotrace
+      AEROTRACE_ROLE: worker
+    depends_on:
+      postgres: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    deploy: { replicas: 2, resources: { limits: { cpus: "2", memory: 2g } } }
+    stop_grace_period: 45s
+
+  prometheus:
+    image: ${PROMETHEUS_IMAGE:-prom/prometheus:v2.55.1}
+    profiles: [monitoring]
+    volumes: ["./deploy/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro", "./deploy/monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro"]
+    ports: ["9090:9090"]
+
+  grafana:
+    image: ${GRAFANA_IMAGE:-grafana/grafana:11.3.0}
+    profiles: [monitoring]
+    environment: { GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_PASSWORD:-change-me}" }
+    volumes: ["./deploy/monitoring/grafana:/etc/grafana/provisioning:ro"]
+    ports: ["3001:3000"]
+
+volumes:
+  pgdata:

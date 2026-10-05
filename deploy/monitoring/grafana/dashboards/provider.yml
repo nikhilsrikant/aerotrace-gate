@@ -1,0 +1,2 @@
+apiVersion: 1
+providers: [{ name: aerotrace, folder: AeroTrace, type: file, options: { path: /etc/grafana/provisioning/dashboards } }]

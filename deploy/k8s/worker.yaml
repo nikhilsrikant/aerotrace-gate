@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: aerotrace-worker, labels: { app: aerotrace, role: worker } }
+spec:
+  replicas: 2            # KEDA (keda-scaledobject.yaml) takes over this number
+  selector: { matchLabels: { app: aerotrace, role: worker } }
+  template:
+    metadata:
+      labels: { app: aerotrace, role: worker }
+      annotations: { prometheus.io/scrape: "true", prometheus.io/path: /metrics, prometheus.io/port: "9464" }
+    spec:
+      terminationGracePeriodSeconds: 60
+      securityContext: { runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: worker
+          image: aerotrace-gate
+          args: ["worker"]
+          env: [{ name: AEROTRACE_ROLE, value: worker }, { name: WORKER_SHUTDOWN_GRACE_MS, value: "50000" }]
+          envFrom: [{ configMapRef: { name: aerotrace-config } }, { secretRef: { name: aerotrace-secrets } }]
+          ports: [{ name: metrics, containerPort: 9464 }]
+          livenessProbe: { httpGet: { path: /healthz, port: metrics }, periodSeconds: 30, timeoutSeconds: 3, failureThreshold: 4 }
+          readinessProbe: { httpGet: { path: /healthz, port: metrics }, periodSeconds: 15 }
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ["ALL"] } }
+          resources: { requests: { cpu: 500m, memory: 768Mi }, limits: { memory: 3Gi } }
+          volumeMounts: [{ name: tmp, mountPath: /tmp }]
+      volumes: [{ name: tmp, emptyDir: {} }]
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: aerotrace-worker }
+spec: { minAvailable: 1, selector: { matchLabels: { app: aerotrace, role: worker } } }

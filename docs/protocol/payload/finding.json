@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aerotrace.example/a2a/1.0.0/payload/finding.json",
+  "title": "A defect, with the evidence that supports it",
+  "type": "object",
+  "required": [
+    "title",
+    "severity",
+    "citations"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "layer": {
+      "enum": [
+        "L1",
+        "L2"
+      ]
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "severity": {
+      "enum": [
+        1,
+        2,
+        3
+      ],
+      "description": "1 blocks certification"
+    },
+    "objective": {
+      "type": "string",
+      "description": "DO-178C objective, e.g. Table A-7"
+    },
+    "ref": {
+      "type": "string"
+    },
+    "citations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Paths of the evidence records; a finding without a source is rejected"
+    }
+  }
+}

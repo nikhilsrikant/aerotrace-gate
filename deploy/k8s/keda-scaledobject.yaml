@@ -1,0 +1,29 @@
+# Workers scale on the real queue: audit and import jobs that are ready to run right now.
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata: { name: aerotrace-pg }
+spec:
+  secretTargetRef: [{ parameter: connection, name: aerotrace-secrets, key: DATABASE_URL }]
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata: { name: aerotrace-worker }
+spec:
+  scaleTargetRef: { name: aerotrace-worker }
+  minReplicaCount: 1
+  maxReplicaCount: 20
+  pollingInterval: 15
+  cooldownPeriod: 300
+  fallback: { failureThreshold: 3, replicas: 2 }
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp: { stabilizationWindowSeconds: 0, policies: [{ type: Percent, value: 100, periodSeconds: 15 }] }
+        scaleDown: { stabilizationWindowSeconds: 300, policies: [{ type: Percent, value: 25, periodSeconds: 60 }] }
+  triggers:
+    - type: postgresql
+      authenticationRef: { name: aerotrace-pg }
+      metadata:
+        query: "SELECT count(*) FROM jobs WHERE status IN ('queued','running') AND run_after <= now()"
+        targetQueryValue: "4"
+        activationTargetQueryValue: "0"

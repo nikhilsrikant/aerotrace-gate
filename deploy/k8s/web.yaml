@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: aerotrace-web, labels: { app: aerotrace, role: web } }
+spec:
+  replicas: 2
+  strategy: { rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } }
+  selector: { matchLabels: { app: aerotrace, role: web } }
+  template:
+    metadata:
+      labels: { app: aerotrace, role: web }
+      annotations: { prometheus.io/scrape: "true", prometheus.io/path: /api/metrics, prometheus.io/port: "3000" }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001, fsGroup: 10001, seccompProfile: { type: RuntimeDefault } }
+      topologySpreadConstraints: [{ maxSkew: 1, topologyKey: kubernetes.io/hostname, whenUnsatisfiable: ScheduleAnyway, labelSelector: { matchLabels: { app: aerotrace, role: web } } }]
+      containers:
+        - name: web
+          image: aerotrace-gate
+          args: ["web"]
+          ports: [{ name: http, containerPort: 3000 }]
+          envFrom: [{ configMapRef: { name: aerotrace-config } }, { secretRef: { name: aerotrace-secrets } }]
+          readinessProbe: { httpGet: { path: /api/ready, port: http }, periodSeconds: 10, timeoutSeconds: 3 }
+          livenessProbe: { httpGet: { path: /api/health, port: http }, periodSeconds: 20, timeoutSeconds: 3, failureThreshold: 3 }
+          startupProbe: { httpGet: { path: /api/health, port: http }, periodSeconds: 3, failureThreshold: 30 }
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ["ALL"] } }
+          resources: { requests: { cpu: 250m, memory: 384Mi }, limits: { memory: 1Gi } }
+          volumeMounts: [{ name: tmp, mountPath: /tmp }, { name: cache, mountPath: /app/.next/cache }]
+      volumes: [{ name: tmp, emptyDir: {} }, { name: cache, emptyDir: {} }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: aerotrace-web, labels: { app: aerotrace, role: web } }
+spec:
+  selector: { app: aerotrace, role: web }
+  ports: [{ name: http, port: 80, targetPort: http }]
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: aerotrace-web }
+spec: { minAvailable: 1, selector: { matchLabels: { app: aerotrace, role: web } } }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: { name: aerotrace-web }
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: aerotrace-web }
+  minReplicas: 2
+  maxReplicas: 6
+  metrics: [{ type: Resource, resource: { name: cpu, target: { type: Utilization, averageUtilization: 70 } } }]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: aerotrace
+  annotations: { nginx.ingress.kubernetes.io/proxy-body-size: 200m }
+spec:
+  tls: [{ hosts: [aerotrace.example.com], secretName: aerotrace-tls }]
+  rules:
+    - host: aerotrace.example.com
+      http: { paths: [{ path: /, pathType: Prefix, backend: { service: { name: aerotrace-web, port: { name: http } } } }] }

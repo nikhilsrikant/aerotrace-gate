@@ -1,0 +1,26 @@
+groups:
+  - name: aerotrace
+    rules:
+      - alert: AeroTraceQueueBacklog
+        expr: max(aerotrace_queue_jobs{status="ready"}) > 50
+        for: 10m
+        labels: { severity: warning }
+        annotations: { summary: "More than 50 audit jobs waiting for 10 minutes. Add workers or check that workers are running." }
+      - alert: AeroTraceNoWorkers
+        expr: absent(up{job="aerotrace-worker"} == 1)
+        for: 5m
+        labels: { severity: critical }
+        annotations: { summary: "No AeroTrace worker is up. Audits and schedules are not running." }
+      - alert: AeroTraceSchedulesOverdue
+        expr: max(aerotrace_schedules_overdue) > 0
+        for: 15m
+        labels: { severity: warning }
+        annotations: { summary: "A scheduled audit is more than 10 minutes overdue." }
+      - alert: AeroTraceApprovalAging
+        expr: max(aerotrace_oldest_pending_approval_seconds) > 3 * 86400
+        labels: { severity: info }
+        annotations: { summary: "An audit has waited more than 3 days for approval." }
+      - alert: AeroTraceFailedRuns
+        expr: increase(aerotrace_worker_jobs_total{result="failed"}[1h]) > 0
+        labels: { severity: warning }
+        annotations: { summary: "An audit failed after all retries in the last hour." }

@@ -1,0 +1,53 @@
+# AWS Distro for OpenTelemetry collector, run as a sidecar in every ECS task.
+# Terraform passes this whole file to the container in AOT_CONFIG_CONTENT.
+# The app sends OTLP to http://localhost:4318; traces go to X-Ray, metrics to CloudWatch (EMF) in namespace AeroTrace.
+extensions:
+  health_check:
+    endpoint: localhost:13133
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: localhost:4317
+      http:
+        endpoint: localhost:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+  resourcedetection:
+    detectors: [env, ecs]
+    timeout: 5s
+    override: false
+  batch:
+    timeout: 10s
+    send_batch_size: 1024
+
+exporters:
+  awsxray:
+    indexed_attributes: [http.route, aerotrace.agent, aerotrace.verdict]
+  awsemf:
+    namespace: AeroTrace
+    # Terraform creates this log group with retention and encryption. Keep the two names in step.
+    log_group_name: /aerotrace/metrics
+    log_stream_name: "{TaskId}"
+    # Metrics keep their OpenTelemetry names (aerotrace.approvals.oldest_age_seconds and so on).
+    # The default rollup also publishes each metric with no dimensions, which is what the CloudWatch alarms watch.
+    dimension_rollup_option: ZeroAndSingleDimensionRollup
+    resource_to_telemetry_conversion:
+      enabled: false
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection, batch]
+      exporters: [awsxray]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection, batch]
+      exporters: [awsemf]

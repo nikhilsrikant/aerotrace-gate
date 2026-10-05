@@ -1,0 +1,47 @@
+# OpenTelemetry collector (contrib) sidecar for Azure Container Apps.
+# Terraform passes this file in the OTEL_CONFIG variable and starts the collector with --config=env:OTEL_CONFIG.
+# APPLICATIONINSIGHTS_CONNECTION_STRING comes from a Container Apps secret backed by Key Vault.
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: localhost:4317
+      http:
+        endpoint: localhost:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+  resourcedetection:
+    detectors: [env]
+    timeout: 5s
+    override: false
+  batch:
+    timeout: 10s
+    send_batch_size: 1024
+
+exporters:
+  azuremonitor:
+    connection_string: ${env:APPLICATIONINSIGHTS_CONNECTION_STRING}
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection, batch]
+      exporters: [azuremonitor]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection, batch]
+      exporters: [azuremonitor]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection, batch]
+      exporters: [azuremonitor]

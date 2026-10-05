@@ -1,0 +1,47 @@
+# Copy to terraform.tfvars and fill in. Required values first.
+
+project_id  = "my-aerotrace-project"
+admin_email = "admin@example.com"
+github_repo = "nikhilsrikant/aerotrace-gate"
+
+region      = "us-central1"
+name_prefix = "aerotrace"
+environment = "prod"
+alert_email = "aerotrace-oncall@example.com"
+
+# Final hostname, if you put a load balancer or domain mapping in front (docs/cloud/gcp.md).
+# Leave empty to use the Cloud Run URL.
+# public_url = "https://gate.example.com"
+
+image_tag       = "2.3.0"
+secret_delivery = "ref"
+
+# Turn on after the app has been running for a few minutes (the metric must exist first).
+enable_app_metric_alerts = false
+
+extra_environment = {
+  LOG_LEVEL      = "info"
+  LLM_PROVIDER   = "none"
+  SEED_DEMO_DATA = "false"
+  # OIDC_ISSUER    = "https://accounts.google.com"
+  # OIDC_CLIENT_ID = "..."
+  # OIDC_CLIENT_SECRET_REF = "gcp-sm://projects/my-aerotrace-project/secrets/aerotrace-prod-oidc-client-secret/versions/latest"
+}
+
+# Evidence connectors read tokens from secrets named aerotrace-prod-connector-* (see the
+# connector_secret_prefix output). List internal Git or Jira hosts here if they sit on private addresses.
+# connector_allowed_hosts = "github.internal.example.com,jira.internal.example.com"
+
+# ---- pilot (cheaper) ----
+# db_tier              = "db-custom-1-3840"
+# db_availability_type = "ZONAL"
+# kms_protection_level = "SOFTWARE"
+# web_min_instances    = 0
+# worker_cpu           = "1"
+# worker_memory        = "2Gi"
+
+# ---- production ----
+# db_tier              = "db-custom-4-15360"
+# db_availability_type = "REGIONAL"
+# web_min_instances    = 2
+# worker_max_instances = 10

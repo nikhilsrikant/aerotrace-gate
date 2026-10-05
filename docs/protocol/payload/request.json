@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aerotrace.example/a2a/1.0.0/payload/request.json",
+  "title": "Audit request from the Orchestrator",
+  "type": "object",
+  "required": [
+    "scope"
+  ],
+  "properties": {
+    "scope": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Module ID being audited"
+    },
+    "dal": {
+      "enum": [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E"
+      ]
+    },
+    "baseline": {
+      "type": "string"
+    },
+    "layers": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "L1",
+          "L2"
+        ]
+      }
+    },
+    "requestedBy": {
+      "type": "string"
+    }
+  }
+}

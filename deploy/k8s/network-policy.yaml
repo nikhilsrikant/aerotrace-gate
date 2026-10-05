@@ -1,0 +1,16 @@
+# Web takes traffic from the ingress controller; workers take none except metrics scrapes. Both may reach Postgres, DNS and HTTPS egress (SSO, LLM, webhooks).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: aerotrace-web }
+spec:
+  podSelector: { matchLabels: { app: aerotrace, role: web } }
+  policyTypes: [Ingress]
+  ingress: [{ ports: [{ port: 3000 }] }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: aerotrace-worker }
+spec:
+  podSelector: { matchLabels: { app: aerotrace, role: worker } }
+  policyTypes: [Ingress]
+  ingress: [{ ports: [{ port: 9464 }] }]

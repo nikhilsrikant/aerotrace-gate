@@ -1,0 +1,21 @@
+# Run once per release before rolling web and worker:  kubectl -n aerotrace create job --from=job/aerotrace-migrate migrate-$(date +%s)
+apiVersion: batch/v1
+kind: Job
+metadata: { name: aerotrace-migrate }
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata: { labels: { app: aerotrace, role: migrate } }
+    spec:
+      restartPolicy: OnFailure
+      securityContext: { runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: migrate
+          image: aerotrace-gate
+          args: ["migrate"]
+          envFrom: [{ configMapRef: { name: aerotrace-config } }, { secretRef: { name: aerotrace-secrets } }]
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ["ALL"] } }
+          resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { memory: 1Gi } }
+          volumeMounts: [{ name: tmp, mountPath: /tmp }]
+      volumes: [{ name: tmp, emptyDir: {} }]

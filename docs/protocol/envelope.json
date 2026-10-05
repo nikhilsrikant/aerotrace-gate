@@ -1,0 +1,224 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aerotrace.example/a2a/1.0.0/envelope.json",
+  "title": "AeroTrace A2A message envelope v1.0.0",
+  "type": "object",
+  "required": [
+    "id",
+    "ts",
+    "from",
+    "to",
+    "subject",
+    "type",
+    "correlationId",
+    "payload",
+    "sig"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^msg_[0-9]{6,}$"
+    },
+    "ts": {
+      "type": "integer",
+      "description": "Unix epoch milliseconds"
+    },
+    "from": {
+      "enum": [
+        "Orchestrator",
+        "Requirements",
+        "Design",
+        "Code",
+        "Testing",
+        "ConfigMgmt"
+      ]
+    },
+    "to": {
+      "enum": [
+        "Orchestrator",
+        "Requirements",
+        "Design",
+        "Code",
+        "Testing",
+        "ConfigMgmt",
+        "*"
+      ],
+      "description": "\"*\" broadcasts to every subscriber except the sender"
+    },
+    "subject": {
+      "type": "string",
+      "pattern": "^audit\\.[A-Za-z0-9_-]+\\.(orchestrator|requirements|design|code|testing|configmgmt)\\.(request|status|dependency|blocker|finding|heartbeat|result|error)$",
+      "description": "audit.<runId>.<sender>.<type>"
+    },
+    "type": {
+      "enum": [
+        "request",
+        "status",
+        "error",
+        "finding",
+        "dependency",
+        "blocker",
+        "heartbeat",
+        "result"
+      ]
+    },
+    "correlationId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "payload": {
+      "type": "object"
+    },
+    "latencyMs": {
+      "type": "number"
+    },
+    "sig": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "HMAC-SHA256, hex, with the sender's key, over canonical JSON of the envelope minus sig, prevHash, hash, accepted and reason"
+    },
+    "prevHash": {
+      "type": "string"
+    },
+    "hash": {
+      "type": "string",
+      "description": "sha256(prevHash + canonical({...envelope, accepted, reason}))"
+    },
+    "accepted": {
+      "type": "boolean"
+    },
+    "reason": {
+      "type": "string"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "request"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "https://aerotrace.example/a2a/1.0.0/payload/request.json"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "status"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "https://aerotrace.example/a2a/1.0.0/payload/status.json"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "error"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "https://aerotrace.example/a2a/1.0.0/payload/error.json"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "finding"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "https://aerotrace.example/a2a/1.0.0/payload/finding.json"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "dependency"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "https://aerotrace.example/a2a/1.0.0/payload/dependency.json"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "blocker"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "https://aerotrace.example/a2a/1.0.0/payload/blocker.json"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "heartbeat"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "https://aerotrace.example/a2a/1.0.0/payload/heartbeat.json"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "result"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "https://aerotrace.example/a2a/1.0.0/payload/result.json"
+          }
+        }
+      }
+    }
+  ]
+}

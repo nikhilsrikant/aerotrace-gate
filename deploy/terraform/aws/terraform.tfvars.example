@@ -1,0 +1,49 @@
+# Copy to terraform.tfvars and fill in. Required values first.
+
+public_url          = "https://gate.example.com"
+acm_certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/00000000-0000-0000-0000-000000000000"
+admin_email         = "admin@example.com"
+github_repo         = "nikhilsrikant/aerotrace-gate"
+
+region      = "us-east-1"
+name_prefix = "aerotrace"
+environment = "prod"
+alarm_email = "aerotrace-oncall@example.com"
+
+# Only from the corporate network, for example:
+# allowed_cidrs = ["203.0.113.0/24"]
+
+# Image Terraform puts in the first task definitions. Push it before the full apply (docs/cloud/aws.md).
+image_tag = "2.3.0"
+
+# Set to "platform" if the image you run does not resolve *_REF variables yet.
+secret_delivery = "ref"
+
+# Extra settings for the app (non-secret).
+extra_environment = {
+  LOG_LEVEL      = "info"
+  LLM_PROVIDER   = "none"
+  SEED_DEMO_DATA = "false"
+  # OIDC_ISSUER    = "https://login.microsoftonline.com/<tenant>/v2.0"
+  # OIDC_CLIENT_ID = "..."
+  # OIDC_CLIENT_SECRET_REF = "aws-sm://arn:aws:secretsmanager:...:secret:aerotrace/prod/oidc-client-secret"
+}
+
+# Evidence connectors read tokens from Secrets Manager under aerotrace/prod/connectors/ (see the
+# connector_secret_prefix output). List internal Git or Jira hosts here if they sit on private addresses.
+# connector_allowed_hosts = "github.internal.example.com,jira.internal.example.com"
+
+# ---- pilot (cheaper) ----
+# db_instance_class     = "db.t4g.small"
+# db_multi_az           = false
+# nat_gateway_ha        = false
+# web_desired_count     = 1
+# worker_desired_count  = 1
+# enable_waf            = false
+
+# ---- production ----
+# db_instance_class     = "db.m7g.large"
+# db_multi_az           = true
+# nat_gateway_ha        = true
+# web_desired_count     = 2
+# worker_max_count      = 20
