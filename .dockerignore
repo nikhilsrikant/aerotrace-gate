@@ -1,0 +1,12 @@
+node_modules
+.next
+dist
+.git
+.github
+demo
+*.zip
+.env
+.env.*
+!.env.example
+coverage
+npm-debug.log

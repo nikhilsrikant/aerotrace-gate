@@ -1,0 +1,210 @@
+# Build the image, push it to ECR, run migrate on ECS, then roll web and worker.
+# Every value comes from repository or environment variables (terraform output github_variables).
+# Authentication is GitHub OIDC; there are no stored AWS keys.
+name: deploy-aws
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag to build and deploy (empty = the commit SHA)"
+        required: false
+        default: ""
+  push:
+    tags: ["v*"]
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-aws
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build, migrate, roll out
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment:
+      name: production
+      url: ${{ vars.AEROTRACE_PUBLIC_URL }}
+    env:
+      IMAGE_TAG: ${{ inputs.image_tag || (github.ref_type == 'tag' && github.ref_name) || github.sha }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+      ECR_REPOSITORY_URL: ${{ vars.ECR_REPOSITORY_URL }}
+      ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+      ECS_WEB_SERVICE: ${{ vars.ECS_WEB_SERVICE }}
+      ECS_WORKER_SERVICE: ${{ vars.ECS_WORKER_SERVICE }}
+      ECS_WEB_FAMILY: ${{ vars.ECS_WEB_FAMILY }}
+      ECS_WORKER_FAMILY: ${{ vars.ECS_WORKER_FAMILY }}
+      ECS_MIGRATE_FAMILY: ${{ vars.ECS_MIGRATE_FAMILY }}
+      ECS_SUBNETS: ${{ vars.ECS_SUBNETS }}
+      ECS_SECURITY_GROUP: ${{ vars.ECS_SECURITY_GROUP }}
+      ECS_LOG_GROUP: ${{ vars.ECS_LOG_GROUP }}
+      AEROTRACE_PUBLIC_URL: ${{ vars.AEROTRACE_PUBLIC_URL }}
+
+    steps:
+      - name: Check configuration
+        run: |
+          missing=0
+          for v in AWS_REGION AWS_DEPLOY_ROLE_ARN ECR_REPOSITORY_URL ECS_CLUSTER ECS_WEB_SERVICE ECS_WORKER_SERVICE \
+                   ECS_WEB_FAMILY ECS_WORKER_FAMILY ECS_MIGRATE_FAMILY ECS_SUBNETS ECS_SECURITY_GROUP ECS_LOG_GROUP AEROTRACE_PUBLIC_URL; do
+            if [ -z "${!v}" ]; then echo "::error::Repository variable $v is not set (see docs/cloud/aws.md)"; missing=1; fi
+          done
+          exit $missing
+
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: aerotrace-deploy-${{ github.run_id }}
+
+      - name: Log in to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Work out the image reference
+        id: image
+        run: |
+          echo "ref=${ECR_REPOSITORY_URL}:${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${IMAGE_TAG#v}" >> "$GITHUB_OUTPUT"
+          # Tags are immutable in ECR. If this tag is already there (a re-run), deploy it as-is.
+          if aws ecr describe-images --repository-name "${ECR_REPOSITORY_URL#*/}" --image-ids imageTag="$IMAGE_TAG" >/dev/null 2>&1; then
+            echo "Image ${IMAGE_TAG} already in ECR; skipping the build."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.image.outputs.exists != 'true'
+
+      - name: Build and push
+        if: steps.image.outputs.exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: ${{ steps.image.outputs.ref }}
+          build-args: VERSION=${{ steps.image.outputs.version }}
+          # A single-platform manifest keeps ECR scan-on-push results attached to the tag.
+          provenance: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Register task definitions with the new image
+        id: taskdefs
+        env:
+          IMAGE: ${{ steps.image.outputs.ref }}
+        run: |
+          set -euo pipefail
+          # Copies the latest revision of each family (which carries any Terraform changes) and swaps the app image.
+          register() {
+            aws ecs describe-task-definition --task-definition "$1" --include TAGS --output json > current.json
+            jq --arg img "$IMAGE" '
+              (.tags // []) as $tags
+              | .taskDefinition
+              | {family, taskRoleArn, executionRoleArn, networkMode, containerDefinitions, volumes,
+                 placementConstraints, requiresCompatibilities, cpu, memory, runtimePlatform, ephemeralStorage}
+              | .containerDefinitions |= map(if .name == "app" then .image = $img else . end)
+              | with_entries(select(.value != null))
+              | if ($tags | length) > 0 then .tags = $tags else . end
+            ' current.json > new.json
+            aws ecs register-task-definition --cli-input-json file://new.json \
+              --query taskDefinition.taskDefinitionArn --output text
+          }
+          {
+            echo "migrate=$(register "$ECS_MIGRATE_FAMILY")"
+            echo "web=$(register "$ECS_WEB_FAMILY")"
+            echo "worker=$(register "$ECS_WORKER_FAMILY")"
+          } >> "$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
+
+      - name: Run migrate and wait for it
+        env:
+          TASK_DEF: ${{ steps.taskdefs.outputs.migrate }}
+        run: |
+          set -euo pipefail
+          out=$(aws ecs run-task \
+            --cluster "$ECS_CLUSTER" \
+            --task-definition "$TASK_DEF" \
+            --launch-type FARGATE \
+            --network-configuration "awsvpcConfiguration={subnets=[${ECS_SUBNETS}],securityGroups=[${ECS_SECURITY_GROUP}],assignPublicIp=DISABLED}" \
+            --started-by "github-${GITHUB_RUN_ID}" \
+            --propagate-tags TASK_DEFINITION \
+            --output json)
+          task_arn=$(jq -r '.tasks[0].taskArn // empty' <<<"$out")
+          if [ -z "$task_arn" ]; then
+            echo "::error::run-task did not start the migrate task"
+            jq '.failures' <<<"$out"
+            exit 1
+          fi
+          echo "Started $task_arn"
+
+          # The waiter gives up after 10 minutes; allow up to 30.
+          for attempt in 1 2 3; do
+            if aws ecs wait tasks-stopped --cluster "$ECS_CLUSTER" --tasks "$task_arn"; then break; fi
+            echo "Still running after $((attempt * 10)) minutes..."
+          done
+
+          desc=$(aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "$task_arn" --output json)
+          status=$(jq -r '.tasks[0].lastStatus' <<<"$desc")
+          code=$(jq -r '.tasks[0].containers[] | select(.name == "app") | .exitCode // "none"' <<<"$desc")
+          reason=$(jq -r '.tasks[0].stoppedReason // ""' <<<"$desc")
+
+          echo "---- migrate output ----"
+          aws logs get-log-events --log-group-name "$ECS_LOG_GROUP" \
+            --log-stream-name "migrate/app/${task_arn##*/}" --start-from-head --limit 500 \
+            --query 'events[].message' --output text || echo "(no logs yet)"
+          echo "------------------------"
+
+          if [ "$status" != "STOPPED" ] || [ "$code" != "0" ]; then
+            echo "::error::migrate failed (status=$status, exit=$code, reason=$reason). Web and worker were not changed."
+            exit 1
+          fi
+          echo "migrate finished with exit code 0"
+
+      - name: Roll out web and worker
+        env:
+          WEB_TD: ${{ steps.taskdefs.outputs.web }}
+          WORKER_TD: ${{ steps.taskdefs.outputs.worker }}
+        run: |
+          set -euo pipefail
+          aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_WEB_SERVICE" \
+            --task-definition "$WEB_TD" --query service.serviceName --output text
+          aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_WORKER_SERVICE" \
+            --task-definition "$WORKER_TD" --query service.serviceName --output text
+
+          for attempt in 1 2; do
+            if aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$ECS_WEB_SERVICE" "$ECS_WORKER_SERVICE"; then break; fi
+            [ "$attempt" = 2 ] && { echo "::error::services did not become stable"; exit 1; }
+          done
+
+          # The deployment circuit breaker rolls back on failure, which also ends "stable".
+          # Make sure the running revision is the one we registered.
+          check() {
+            running=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$1" \
+              --query 'services[0].taskDefinition' --output text)
+            if [ "$running" != "$2" ]; then
+              echo "::error::$1 is running $running, expected $2 (rolled back?)"
+              exit 1
+            fi
+          }
+          check "$ECS_WEB_SERVICE" "$WEB_TD"
+          check "$ECS_WORKER_SERVICE" "$WORKER_TD"
+
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          for path in /api/health /api/ready; do
+            echo "GET ${AEROTRACE_PUBLIC_URL}${path}"
+            curl -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 10 "${AEROTRACE_PUBLIC_URL}${path}"
+            echo
+          done
+          echo "Deployed ${IMAGE_TAG}" >> "$GITHUB_STEP_SUMMARY"

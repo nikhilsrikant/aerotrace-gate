@@ -1,0 +1,127 @@
+# Build the image, push it to Artifact Registry, run the migrate job, then roll web and worker on Cloud Run.
+# Every value comes from repository or environment variables (terraform output github_variables).
+# Authentication is Workload Identity Federation; there is no service account key.
+name: deploy-gcp
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag to build and deploy (empty = the commit SHA)"
+        required: false
+        default: ""
+  push:
+    tags: ["v*"]
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-gcp
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build, migrate, roll out
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment:
+      name: production
+      url: ${{ vars.AEROTRACE_PUBLIC_URL }}
+    env:
+      IMAGE_TAG: ${{ inputs.image_tag || (github.ref_type == 'tag' && github.ref_name) || github.sha }}
+      IMAGE_NAME: aerotrace-gate
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      GCP_REGION: ${{ vars.GCP_REGION }}
+      GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+      GCP_DEPLOY_SA: ${{ vars.GCP_DEPLOY_SA }}
+      GCP_ARTIFACT_REPO: ${{ vars.GCP_ARTIFACT_REPO }}
+      CLOUD_RUN_WEB_SERVICE: ${{ vars.CLOUD_RUN_WEB_SERVICE }}
+      CLOUD_RUN_WORKER_SERVICE: ${{ vars.CLOUD_RUN_WORKER_SERVICE }}
+      CLOUD_RUN_MIGRATE_JOB: ${{ vars.CLOUD_RUN_MIGRATE_JOB }}
+      AEROTRACE_PUBLIC_URL: ${{ vars.AEROTRACE_PUBLIC_URL }}
+
+    steps:
+      - name: Check configuration
+        run: |
+          missing=0
+          for v in GCP_PROJECT_ID GCP_REGION GCP_WIF_PROVIDER GCP_DEPLOY_SA GCP_ARTIFACT_REPO \
+                   CLOUD_RUN_WEB_SERVICE CLOUD_RUN_WORKER_SERVICE CLOUD_RUN_MIGRATE_JOB AEROTRACE_PUBLIC_URL; do
+            if [ -z "${!v}" ]; then echo "::error::Repository variable $v is not set (see docs/cloud/gcp.md)"; missing=1; fi
+          done
+          exit $missing
+
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud (Workload Identity Federation)
+        uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_DEPLOY_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Prepare the registry
+        id: image
+        run: |
+          set -euo pipefail
+          gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+          ref="${GCP_ARTIFACT_REPO}/${IMAGE_NAME}:${IMAGE_TAG}"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "version=${IMAGE_TAG#v}" >> "$GITHUB_OUTPUT"
+          # Tags are immutable in this repository. If the tag exists (a re-run), deploy it as-is.
+          if gcloud artifacts docker images describe "$ref" --quiet >/dev/null 2>&1; then
+            echo "Image ${IMAGE_TAG} already in Artifact Registry; skipping the build."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.image.outputs.exists != 'true'
+
+      - name: Build and push
+        if: steps.image.outputs.exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: ${{ steps.image.outputs.ref }}
+          build-args: VERSION=${{ steps.image.outputs.version }}
+          provenance: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run migrate and wait for it
+        env:
+          IMAGE: ${{ steps.image.outputs.ref }}
+        run: |
+          set -euo pipefail
+          gcloud run jobs update "$CLOUD_RUN_MIGRATE_JOB" --region "$GCP_REGION" --image "$IMAGE" --quiet
+          # --wait exits non-zero if the execution fails, which stops the workflow before the rollout.
+          gcloud run jobs execute "$CLOUD_RUN_MIGRATE_JOB" --region "$GCP_REGION" --wait --quiet
+
+      - name: Roll out web and worker
+        env:
+          IMAGE: ${{ steps.image.outputs.ref }}
+        run: |
+          set -euo pipefail
+          # Each service has two containers (app + otel-collector); --container picks the app.
+          # The command waits until the new revision is ready and serving, and fails if it is not.
+          for svc in "$CLOUD_RUN_WEB_SERVICE" "$CLOUD_RUN_WORKER_SERVICE"; do
+            gcloud run services update "$svc" --region "$GCP_REGION" --container app --image "$IMAGE" --quiet
+          done
+
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          for path in /api/health /api/ready; do
+            echo "GET ${AEROTRACE_PUBLIC_URL}${path}"
+            curl -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 10 "${AEROTRACE_PUBLIC_URL}${path}"
+            echo
+          done
+          echo "Deployed ${IMAGE_TAG}" >> "$GITHUB_STEP_SUMMARY"

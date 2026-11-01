@@ -1,0 +1,163 @@
+# Build the image, push it to ACR, run the migrate job, then roll web and worker on Container Apps.
+# Every value comes from repository or environment variables (terraform output github_variables).
+# Authentication is a federated credential on an Entra application; there is no client secret.
+name: deploy-azure
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag to build and deploy (empty = the commit SHA)"
+        required: false
+        default: ""
+  push:
+    tags: ["v*"]
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-azure
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build, migrate, roll out
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment:
+      name: production
+      url: ${{ vars.AEROTRACE_PUBLIC_URL }}
+    env:
+      IMAGE_TAG: ${{ inputs.image_tag || (github.ref_type == 'tag' && github.ref_name) || github.sha }}
+      IMAGE_NAME: aerotrace-gate
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      ACR_NAME: ${{ vars.ACR_NAME }}
+      ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
+      ACA_WEB_APP: ${{ vars.ACA_WEB_APP }}
+      ACA_WORKER_APP: ${{ vars.ACA_WORKER_APP }}
+      ACA_MIGRATE_JOB: ${{ vars.ACA_MIGRATE_JOB }}
+      AEROTRACE_PUBLIC_URL: ${{ vars.AEROTRACE_PUBLIC_URL }}
+
+    steps:
+      - name: Check configuration
+        run: |
+          missing=0
+          for v in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID AZURE_RESOURCE_GROUP ACR_NAME ACR_LOGIN_SERVER \
+                   ACA_WEB_APP ACA_WORKER_APP ACA_MIGRATE_JOB AEROTRACE_PUBLIC_URL; do
+            if [ -z "${!v}" ]; then echo "::error::Repository variable $v is not set (see docs/cloud/azure.md)"; missing=1; fi
+          done
+          exit $missing
+
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Prepare the Azure CLI and registry
+        id: image
+        run: |
+          set -euo pipefail
+          az extension add --name containerapp --upgrade --only-show-errors
+          az acr login --name "$ACR_NAME"
+          echo "ref=${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${IMAGE_TAG#v}" >> "$GITHUB_OUTPUT"
+          if az acr repository show --name "$ACR_NAME" --image "${IMAGE_NAME}:${IMAGE_TAG}" --only-show-errors >/dev/null 2>&1; then
+            echo "Image ${IMAGE_TAG} already in ACR; skipping the build."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.image.outputs.exists != 'true'
+
+      - name: Build and push
+        if: steps.image.outputs.exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: ${{ steps.image.outputs.ref }}
+          build-args: VERSION=${{ steps.image.outputs.version }}
+          provenance: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run migrate and wait for it
+        env:
+          IMAGE: ${{ steps.image.outputs.ref }}
+        run: |
+          set -euo pipefail
+          az containerapp job update --name "$ACA_MIGRATE_JOB" --resource-group "$AZURE_RESOURCE_GROUP" \
+            --container-name app --image "$IMAGE" --only-show-errors --output none
+          execution=$(az containerapp job start --name "$ACA_MIGRATE_JOB" --resource-group "$AZURE_RESOURCE_GROUP" \
+            --query name --output tsv)
+          echo "Started execution $execution"
+
+          deadline=$(( $(date +%s) + 1800 ))
+          while :; do
+            status=$(az containerapp job execution show --name "$ACA_MIGRATE_JOB" --resource-group "$AZURE_RESOURCE_GROUP" \
+              --job-execution-name "$execution" --query properties.status --output tsv)
+            echo "$(date -u +%H:%M:%S) $status"
+            case "$status" in
+              Succeeded) break ;;
+              Failed|Stopped|Degraded)
+                echo "::error::migrate execution $execution ended as $status. Web and worker were not changed."
+                echo "Logs: Log Analytics, ContainerAppConsoleLogs_CL | where ContainerJobName_s == '$ACA_MIGRATE_JOB'"
+                exit 1 ;;
+            esac
+            if [ "$(date +%s)" -gt "$deadline" ]; then
+              echo "::error::migrate did not finish within 30 minutes"
+              exit 1
+            fi
+            sleep 10
+          done
+
+      - name: Roll out web and worker
+        env:
+          IMAGE: ${{ steps.image.outputs.ref }}
+        run: |
+          set -euo pipefail
+          wait_healthy() {
+            app="$1"; revision="$2"; deadline=$(( $(date +%s) + 900 ))
+            while :; do
+              state=$(az containerapp revision show --name "$app" \
+                --resource-group "$AZURE_RESOURCE_GROUP" --revision "$revision" \
+                --query "[properties.provisioningState, properties.healthState]" --output tsv)
+              provisioning=$(sed -n 1p <<<"$state")
+              health=$(sed -n 2p <<<"$state")
+              echo "$(date -u +%H:%M:%S) $app/$revision provisioning=$provisioning health=$health"
+              if [ "$provisioning" = "Provisioned" ] && [ "$health" = "Healthy" ]; then return 0; fi
+              if [ "$provisioning" = "Failed" ]; then echo "::error::$revision failed to provision"; return 1; fi
+              if [ "$(date +%s)" -gt "$deadline" ]; then echo "::error::$revision not healthy after 15 minutes"; return 1; fi
+              sleep 15
+            done
+          }
+
+          for app in "$ACA_WEB_APP" "$ACA_WORKER_APP"; do
+            revision=$(az containerapp update --name "$app" --resource-group "$AZURE_RESOURCE_GROUP" \
+              --container-name app --image "$IMAGE" --query properties.latestRevisionName --output tsv)
+            echo "$app -> $revision"
+            wait_healthy "$app" "$revision"
+          done
+
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          for path in /api/health /api/ready; do
+            echo "GET ${AEROTRACE_PUBLIC_URL}${path}"
+            curl -fsS --retry 12 --retry-delay 5 --retry-all-errors --max-time 10 "${AEROTRACE_PUBLIC_URL}${path}"
+            echo
+          done
+          echo "Deployed ${IMAGE_TAG}" >> "$GITHUB_STEP_SUMMARY"
