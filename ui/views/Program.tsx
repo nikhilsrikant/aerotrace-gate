@@ -1,6 +1,6 @@
 'use client';
-// Program readiness: the whole program on one screen (PS 1.2 criterion 4), the program-wide blockers and
-// "who can unblock what" (criterion 2), and chaos drills that break agents on purpose (criterion 3).
+// Program readiness: the whole program on one screen, the program-wide blockers and
+// "who can unblock what", and chaos drills that break agents on purpose.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useApp, useLoad, useAction, Head, Loading, ErrorBox, Verdict, when, fmt } from '../kit';
 import type { ProgramOverview, ChaosPreset } from '../api';

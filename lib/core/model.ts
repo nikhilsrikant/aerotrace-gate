@@ -119,7 +119,7 @@ export interface Settings {
   passkeys?: PasskeyPolicy;
 }
 export const DEFAULT_SETTINGS: Settings = {
-  orgName: 'Honeywell Aerospace',
+  orgName: 'XYZ Aerospace',
   llm: { provider: 'none', model: 'claude-sonnet-5-5', baseUrl: '' },
   notifications: { slackUrl: '', teamsUrl: '', webhookUrl: '', events: ['run.awaiting_approval', 'run.approved', 'run.denied', 'run.failed'] },
   retentionDays: 3650,

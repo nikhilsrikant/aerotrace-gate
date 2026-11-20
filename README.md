@@ -2,7 +2,7 @@
 
 DO-178C audit readiness, run by five agents and signed off by people. The program decides who those people are.
 
-It started as the Devils Invent 2026 entry for Honeywell's Problem Statement 1.2 (Avionics Audit Agents). Version 3 turns it into something a program can run for real: on AWS, Azure or Google Cloud, with keys in the cloud KMS, several programs in one deployment, telemetry going to the cloud's own monitoring, and evidence pulled straight from Git, Jira and CI.
+It's built for any organization that certifies airborne software under DO-178C, and it runs on AWS, Azure or Google Cloud, with keys in the cloud KMS, several programs in one deployment, telemetry going to the cloud's own monitoring, and evidence pulled straight from Git, Jira and CI.
 
 ## What it does
 
@@ -48,11 +48,11 @@ On a cloud: start with [docs/cloud/README.md](docs/cloud/README.md), then the gu
 
 The web and worker containers run from one image: non-root (UID 10001), read-only root filesystem, all Linux capabilities dropped, and a healthcheck built in.
 
-## Origin: PS 1.2, criterion by criterion
+## How the audit works
 
-The problem statement asks for "a multi-agent validation system where Requirements, Design, Testing, Code, and Configuration Management agents autonomously review artifact categories", exchanging "status, dependency, and blocker messages through a broker, while an orchestrator determines final audit readiness."
+Five agents (Requirements, Design, Code, Testing and Configuration Management) each review one category of evidence. They exchange status, dependency and blocker messages through a broker, and an orchestrator decides whether the program is ready for audit.
 
-| Success criterion | Where it is implemented | How it is tested |
+| Capability | Where it is implemented | How it is tested |
 | --- | --- | --- |
 | 1. Standard A2A message protocol with schemas, authorization, routing, and an auditable message trail | Published spec: [`docs/protocol.md`](docs/protocol.md) and versioned JSON Schemas in [`docs/protocol/`](docs/protocol/), served at `/api/protocol`. Enforced by `lib/engine/broker.ts`: an HMAC key per agent with the sender checked, sender/type permissions, subject routing `audit.<run>.<agent>.<type>`, every message hash-chained, rejected ones included. New agents pass `aerotrace a2a-conformance` before joining | `tests/protocol.test.ts` (schemas and broker agree on every type; real traffic conforms; a buggy agent fails conformance); `tests/audit.test.ts`; `scripts/verify-evidence.mjs` re-checks the trail offline |
 | 2. Orchestrator collects agent status, identifies critical-path blockers, and recommends next actions | Per audit: `lib/engine/audit.ts` (dependency and blocker exchange, `buildCriticalPath`, `buildActions`). Program-wide: `lib/core/program.ts` ranks every blocker across all modules and finds the smallest set of owners that unblocks the most modules; "What if we fixed these?" on each report re-runs the same verdict rule | `tests/program.test.ts`; `tests/e2e.ts` |
@@ -93,7 +93,6 @@ CLOUD_E2E=1 npm run test:e2e   # the same with S3, KMS, Secrets Manager and OTLP
 - [docs/evidence-bundle.md](docs/evidence-bundle.md): the upload format, file by file
 - [docs/api.md](docs/api.md): REST endpoints and CI usage with API tokens
 - [docs/protocol.md](docs/protocol.md): the A2A protocol, with JSON Schemas in [docs/protocol/](docs/protocol/)
-- [docs/judge-qa.md](docs/judge-qa.md): the hackathon Q&A, kept for the record
 
 ## Repository layout
 

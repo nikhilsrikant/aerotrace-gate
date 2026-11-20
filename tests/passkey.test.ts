@@ -17,9 +17,9 @@ const code = async (p: Promise<unknown>, want: string | RegExp) => {
 (async () => {
   let clock = new Date('2026-10-03T15:00:00Z');
   const repo = new MemRepo();
-  const ORIGIN = 'https://gate.honeywell.example';
+  const ORIGIN = 'https://gate.xyz.example';
   const svc = new Services({ repo, signer: await hmacSigner('t'), hasher: { hash: p => sha256(p), verify: async (p, h) => (await sha256(p)) === h }, inline: true,
-    now: () => clock, rp: s => ({ id: 'gate.honeywell.example', name: s.orgName, origins: [ORIGIN] }) });
+    now: () => clock, rp: s => ({ id: 'gate.xyz.example', name: s.orgName, origins: [ORIGIN] }) });
   const s = await seed(repo, svc, { demoUsers: true, syntheticDataset: true, hash: p => sha256(p) });
   const ds = s.datasetId!;
 

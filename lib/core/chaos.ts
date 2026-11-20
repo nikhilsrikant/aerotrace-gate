@@ -1,7 +1,7 @@
-// Chaos drills for the robustness criterion: real faults injected into real audits.
+// Chaos drills: real faults injected into real audits, to prove the gate recovers.
 import type { AgentName, Fault } from '../engine/types';
 export type ChaosPreset = 'testing-offline' | 'code-flaky' | 'forged-design' | 'storm';
-/** Drills for the robustness criterion. Each one names what should happen, so the result can be checked against it. */
+/** Robustness drills. Each one names what should happen, so the result can be checked against it. */
 export const CHAOS_PRESETS: Record<ChaosPreset, { label: string; faults: Partial<Record<AgentName, Fault>>; expect: string }> = {
   'testing-offline': { label: 'Testing agent goes offline', faults: { Testing: 'offline' }, expect: 'Retries with backoff, then the breaker opens. The audit still finishes, marked incomplete, and the verdict cannot be YES.' },
   'code-flaky': { label: 'Code agent drops messages', faults: { Code: 'flaky' }, expect: 'Missed acknowledgements are retried. The agent recovers and the verdict matches a clean run.' },
